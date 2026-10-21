@@ -20,16 +20,31 @@ const PANE = {
   },
 } as const
 
+const skillCall = (skill: string, timestamp: string) =>
+  JSON.stringify({
+    type: 'assistant',
+    timestamp,
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'Skill', input: { skill } }] },
+  })
+const typed = (content: unknown, timestamp: string) =>
+  JSON.stringify({ type: 'user', timestamp, message: { role: 'user', content } })
+
+// Lines as grep hands them back from the transcripts.
 const HISTORY = [
-  '2026-10-20T10:00:00.000Z\tsuperpowers:brainstorming',
-  '2026-10-01T10:00:00.000Z\tsuperpowers:brainstorming',
-  '2026-10-19T10:00:00.000Z\tcompact',
+  skillCall('superpowers:brainstorming', '2026-10-20T10:00:00.000Z'),
+  skillCall('superpowers:brainstorming', '2026-10-01T10:00:00.000Z'),
+  typed('<command-message>compact</command-message>\n<command-name>/compact</command-name>', '2026-10-19T10:00:00.000Z'),
   // after the mod started counting live: left to the live hook
-  '2026-10-21T12:30:00.000Z\tmr-description',
+  typed('<command-name>/mr-description</command-name>', '2026-10-21T12:30:00.000Z'),
+  // a tool result quoting command tags, and a Bash call naming Skill in its text: not uses
+  typed([{ type: 'tool_result', tool_use_id: 't', content: '<command-name>/ecc:plan</command-name>' }], '2026-10-19T11:00:00.000Z'),
+  JSON.stringify({
+    type: 'assistant',
+    timestamp: '2026-10-19T12:00:00.000Z',
+    message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'grep \'"name":"Skill","input":{"skill":"\'' } }] },
+  }),
   'garbage line',
 ].join('\n')
-
-const RAN = { exitCode: 0, stdout: HISTORY, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
 
 const COMMAND = {
   command: 'skill-census',
@@ -58,10 +73,12 @@ function engine(on: On, { store = {}, scan = Promise.resolve() } = {}) {
   on('settings.read', () => ({
     value: { enabledPlugins: { 'ecc@ecc': true, 'superpowers@claude-plugins-official': true } },
   }))
-  // `scan` holds the history read back, as a slow first run does.
-  on('process.run', async () => {
+  // grep's output, in two pieces cut mid-line; `scan` holds it back, as a slow first run does.
+  on('process.spawn', async function* () {
     await scan
-    return { value: RAN }
+    yield { stream: 'stdout' as const, text: HISTORY.slice(0, 100) }
+    yield { stream: 'stdout' as const, text: HISTORY.slice(100) }
+    return { value: { code: 0, signal: null } }
   })
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -78,6 +95,8 @@ test('parseHistory counts uses and the latest one, before the cutoff only', asyn
   })
   expect(found['compact']?.count).toBe(1)
   expect(found['mr-description']).toBeUndefined()
+  expect(found['ecc:plan']).toBeUndefined()
+  expect(Object.keys(found).sort()).toEqual(['compact', 'superpowers:brainstorming'])
 })
 
 test('builtins are left out and plugins are summed', async () => {

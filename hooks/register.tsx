@@ -17,31 +17,44 @@ const inventory = atom({ plugin: 'skill-census', key: 'inventory' } as const, {
 const view = atom({ plugin: 'skill-census', key: 'view' } as const, 'skills')
 const isScanning = atom({ plugin: 'skill-census', key: 'isScanning' } as const, false)
 
-// Prints "<timestamp>\t<skill>" for every Skill tool call and every typed /command in
-// the transcripts under $1. JSON escapes quotes inside strings, so the unescaped
-// patterns only match real structure, never a transcript that quotes them.
-const SCAN = `grep -rhE --include='*.jsonl' -e '"name":"Skill","input":\\{"skill":"' -e '<command-name>/' "$1" | awk '
-{ ts = ""; if (match($0, /"timestamp":"[^"]+"/)) ts = substr($0, RSTART + 13, RLENGTH - 14) }
-/"type":"assistant"/ {
-  s = $0
-  while (match(s, /"name":"Skill","input":\\{"skill":"[^"]+"/)) {
-    print ts "\\t" substr(s, RSTART + 33, RLENGTH - 34); s = substr(s, RSTART + RLENGTH)
-  }
-  next
-}
-/"type":"user"/ && !/"tool_result"/ && match($0, /<command-name>\\/[^<]+<\\/command-name>/) {
-  print ts "\\t" substr($0, RSTART + 15, RLENGTH - 30)
-}'`
+const COMMAND_NAME = /<command-name>\/([^<\s]+)<\/command-name>/
 
+type Block = { type?: string; name?: string; text?: unknown; input?: { skill?: unknown } }
+type Line = { type?: string; timestamp?: string; message?: { content?: string | Block[] } }
+
+// Counts Skill tool calls and typed /commands in transcript lines (JSONL), before `before`.
 export function parseHistory(text: string, before: number): Usage {
   const found: Usage = {}
-  for (const line of text.split('\n')) {
-    const [stamp, name] = line.split('\t')
-    const at = Date.parse(stamp ?? '')
-    if (!name || !(at < before)) continue
+  const count = (name: string, at: number) => {
     const one = (found[name] ??= { count: 0, last: 0 })
     one.count += 1
     one.last = Math.max(one.last, at)
+  }
+  for (const line of text.split('\n')) {
+    let row: Line
+    try {
+      row = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const at = Date.parse(row?.timestamp ?? '')
+    if (!(at < before)) continue
+    const content = row.message?.content
+    if (row.type === 'assistant' && Array.isArray(content)) {
+      for (const block of content) {
+        if (block?.type === 'tool_use' && block.name === 'Skill' && typeof block.input?.skill === 'string') {
+          count(block.input.skill, at)
+        }
+      }
+    } else if (row.type === 'user') {
+      // Only what was typed counts: a tool result can echo command tags it was handed.
+      const texts =
+        typeof content === 'string'
+          ? [content]
+          : (content ?? []).filter(b => b?.type === 'text').map(b => String(b.text))
+      const name = texts.map(t => COMMAND_NAME.exec(t)?.[1]).find(n => n !== undefined)
+      if (name) count(name, at)
+    }
   }
   return found
 }
@@ -108,11 +121,31 @@ async function importHistory($: EngineInterface, liveSince: number) {
   try {
     const root =
       (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await $.env.get('HOME')}/.claude`
-    const ran = await $.process.run(['sh', '-c', SCAN, 'sh', `${root}/projects`], {
-      timeoutMs: 600_000,
+    // The one program the mod runs: grep, keeping the lines with a Skill tool call or a typed
+    // /command. JSON escapes quotes inside strings, so the first pattern only matches real
+    // structure; parseHistory checks the rest. Streamed: the matches outgrow a one-shot run.
+    const grep = $.process.spawn({
+      argv: [
+        'grep',
+        '-rhE',
+        '--include=*.jsonl',
+        '-e',
+        '"name":"Skill","input":\\{"skill":"',
+        '-e',
+        '<command-name>/',
+        `${root}/projects`,
+      ],
     })
-    if (ran.exitCode !== 0) throw new Error(ran.stderr.slice(0, 200))
-    const history = parseHistory(ran.stdout, liveSince)
+    let out = ''
+    let err = ''
+    for await (const { stream, text } of grep) {
+      if (stream === 'stdout') out += text
+      else err += text
+    }
+    const { code } = await grep.result
+    // grep exits 1 when nothing matched: no history yet.
+    if (code !== 0 && code !== 1) throw new Error(err.slice(0, 200) || `grep exited with ${code}`)
+    const history = parseHistory(out, liveSince)
     await serially(async () => {
       await $.store.set('history', history)
       await showUsage($)
