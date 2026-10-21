@@ -41,7 +41,7 @@ In the desktop app: click **+** next to the prompt box → **Plugins** → **Add
 Run `/skill-census`. It prints a per-plugin summary and opens the **Skill census** pane beside the chat (desktop app and fullscreen terminal) with two tables:
 
 - **Skills**: uses and last use of each skill, never-used ones first;
-- **Plugins**: how many of each plugin's skills you used. A plugin's skills cannot be removed one by one, so this is the view for deciding which plugin to disable.
+- **Plugins**: how many of each plugin's skills you used. A plugin's skills cannot be removed one by one, so this is the view for deciding which plugin to disable. Below the table, plugins with no used skill are listed biggest first, each with its `claude plugin disable <plugin>@<marketplace>` command.
 
 ## How it counts
 
