@@ -22,19 +22,25 @@ skill-census: 28 of 527 skills used, 499 never.
 
 Requires **Claude Code 2.1.286 or newer** (`claude --version`). The plugin uses Claude Code's hooks-module API, which is in early access, so an older version will not load it.
 
-At the prompt of a Claude Code terminal session:
-
-```
-/plugin install skill-census --marketplace rustamix/skill-census
-```
-
 From a shell:
 
 ```bash
-claude plugin install skill-census --marketplace rustamix/skill-census
+claude plugin marketplace add rustamix/skill-census
+claude plugin install skill-census@skill-census
+```
+
+Or at the prompt of a Claude Code terminal session:
+
+```
+/plugin marketplace add rustamix/skill-census
+/plugin install skill-census@skill-census
 ```
 
 In the desktop app: click **+** next to the prompt box → **Plugins** → **Add marketplace** with `rustamix/skill-census` → **Add plugin**.
+
+Start a new session afterwards, then run `/skill-census`.
+
+Update with `claude plugin marketplace update skill-census` and `claude plugin update skill-census@skill-census`; remove with `claude plugin uninstall skill-census@skill-census`.
 
 ## Use
 
