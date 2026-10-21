@@ -29,9 +29,18 @@ const HISTORY = [
   'garbage line',
 ].join('\n')
 
-function engine(on: On) {
-  mock.store(on)
-  mock.clock(on, { now: NOW })
+const RAN = { exitCode: 0, stdout: HISTORY, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+
+const COMMAND = {
+  command: 'skill-census',
+  args: '',
+  origin: { kind: 'composer' },
+  presentation: { isFullscreen: true, columns: 160 },
+} as const
+
+function engine(on: On, { store = {}, scan = Promise.resolve() } = {}) {
+  mock.store(on, store)
+  const clock = mock.clock(on, { now: NOW })
   mock.env(on, { HOME: '/home/me' })
   on('command.register', (_, e) => ({ value: { command: e.name } }))
   on('command.list', () => ({
@@ -49,18 +58,15 @@ function engine(on: On) {
   on('settings.read', () => ({
     value: { enabledPlugins: { 'ecc@ecc': true, 'superpowers@claude-plugins-official': true } },
   }))
-  on('process.run', () => ({
-    value: {
-      exitCode: 0,
-      stdout: HISTORY,
-      stderr: '',
-      isStdoutTruncated: false,
-      isStderrTruncated: false,
-    },
-  }))
+  // `scan` holds the history read back, as a slow first run does.
+  on('process.run', async () => {
+    await scan
+    return { value: RAN }
+  })
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('skill.prompt', (_, e) => ({ text: e.text }))
+  return clock
 }
 
 test('parseHistory counts uses and the latest one, before the cutoff only', async () => {
@@ -147,4 +153,63 @@ test('history and live uses show in the pane, on every surface', async ($, on) =
     await ui.press({ key: 'skills' })
     await ui.unmount()
   }
+})
+
+type TestEngine = Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>>[0]
+
+// Uses of superpowers:brainstorming in the Skills table, once background work has settled.
+async function brainstorming($: TestEngine, clock: { advance: (ms: number) => Promise<void> }) {
+  await clock.advance(0)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'skills' })
+  const text = (await ui.find({ type: 'Markdown' }))?.text ?? ''
+  await ui.unmount()
+  return text.match(/\| `superpowers:brainstorming` \| (\d+) \|/)?.[1]
+}
+
+test('two sessions importing at once count history once', async ($, on) => {
+  const clock = engine(on)
+
+  await Promise.all([
+    $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true }),
+    $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true }),
+  ])
+  await $.command.run(COMMAND)
+
+  expect(await brainstorming($, clock)).toBe('2')
+})
+
+test('a 0.1.0 store with doubled counts is recounted from the transcripts', async ($, on) => {
+  const clock = engine(on, {
+    store: {
+      usage: { 'superpowers:brainstorming': { count: 4, last: NOW - DAY } },
+      imported: true,
+      liveSince: NOW - DAY,
+    },
+  })
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run(COMMAND)
+
+  expect(await brainstorming($, clock)).toBe('2')
+})
+
+test('while history is read, no plugin is called unused', async ($, on) => {
+  let finish = () => {}
+  const clock = engine(on, { scan: new Promise<void>(resolve => (finish = resolve)) })
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const { text } = await $.command.run(COMMAND)
+
+  expect(text).toContain('Still reading past transcripts')
+  expect(text).not.toContain('Never used')
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'plugins' })
+  expect((await ui.find({ type: 'Markdown' }))?.text).not.toContain('Never used')
+  await ui.unmount()
+
+  finish()
+  await $.command.run(COMMAND)
+  expect(await brainstorming($, clock)).toBe('2')
 })
