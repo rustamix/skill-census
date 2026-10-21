@@ -10,6 +10,7 @@ const usage = atom({ plugin: 'skill-census', key: 'usage' } as const, {})
 const inventory = atom({ plugin: 'skill-census', key: 'inventory' } as const, {
   skills: [],
   builtins: [],
+  pluginIds: {},
 })
 const view = atom({ plugin: 'skill-census', key: 'view' } as const, 'skills')
 const isScanning = atom({ plugin: 'skill-census', key: 'isScanning' } as const, false)
@@ -76,7 +77,15 @@ async function refreshInventory($: EngineInterface) {
       plugin: c.plugin ?? pluginOf(c.name),
     }))
   const builtins = commands.filter(c => c.source === 'builtin').map(c => c.name)
-  await update($, inventory, () => ({ skills, builtins }))
+  // Without settings the hint loses its commands, not the tables.
+  const settings = await $.settings.read().catch(() => undefined)
+  const enabled = (settings?.enabledPlugins ?? {}) as Record<string, unknown>
+  const pluginIds = Object.fromEntries(
+    Object.keys(enabled)
+      .filter(id => enabled[id] === true)
+      .map(id => [id.split('@')[0]!.toLowerCase(), id]),
+  )
+  await update($, inventory, () => ({ skills, builtins, pluginIds }))
 }
 
 async function importHistory($: EngineInterface, liveSince: number) {
@@ -107,7 +116,7 @@ export function rows(inv: Inventory, use: Usage): Row[] {
 
   return [...names].map(name => ({
     name,
-    group: installed.get(name) ?? pluginOf(name) ?? 'your skills',
+    group: installed.get(name) ?? pluginOf(name) ?? OWN,
     count: use[name]?.count ?? 0,
     last: use[name]?.last ?? 0,
     isInstalled: installed.has(name),
@@ -133,7 +142,9 @@ export function skillsTable(list: Row[], now: number) {
   return ['| Skill | Uses | Last used |', '| --- | ---: | --- |', ...lines].join('\n')
 }
 
-export function pluginsTable(list: Row[], now: number) {
+const OWN = 'your skills'
+
+function pluginGroups(list: Row[]) {
   const groups = new Map<string, { name: string; total: number; used: number; count: number; last: number }>()
   for (const r of list.filter(r => r.isInstalled)) {
     const g = groups.get(r.group) ?? { name: r.group, total: 0, used: 0, count: 0, last: 0 }
@@ -143,11 +154,38 @@ export function pluginsTable(list: Row[], now: number) {
     g.last = Math.max(g.last, r.last)
     groups.set(r.group, g)
   }
-  const lines = [...groups.values()]
+  return [...groups.values()]
+}
+
+export function pluginsTable(list: Row[], now: number) {
+  const lines = pluginGroups(list)
     .sort(byLast)
     .map(g => `| ${g.name} | ${g.used} / ${g.total} | ${g.count} | ${ago(g.last, now)} |`)
 
   return ['| Plugin | Skills used | Uses | Last used |', '| --- | ---: | ---: | --- |', ...lines].join('\n')
+}
+
+// Never-used plugins, biggest first, with the command that turns each off; '' when none.
+export function disableHint(list: Row[], pluginIds: Record<string, string>) {
+  const unused = pluginGroups(list)
+    .filter(g => g.name !== OWN && g.used === 0)
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
+  if (unused.length === 0) return ''
+  const lines = unused.map(g => {
+    const id = pluginIds[g.name.toLowerCase()]
+    const how = id ? `\`claude plugin disable ${id}\`` : 'not in your Claude Code settings: turn it off where it was added'
+    return `| ${g.name} | ${g.total} | ${how} |`
+  })
+
+  return [
+    `**Never used, can be turned off** (${unused.length}):`,
+    '',
+    '| Plugin | Skills | Turn off |',
+    '| --- | ---: | --- |',
+    ...lines,
+    '',
+    'Run the command in a shell, or use `/plugin` in a terminal session (desktop app: **+** → **Plugins**). `claude plugin enable` brings a plugin back.',
+  ].join('\n')
 }
 
 function summary(list: Row[]) {
@@ -188,15 +226,18 @@ export const register: Register = on => {
   on('command.run', { command: PANE }, async $ => {
     await refreshInventory($)
     const opened = await $.ui.open({ id: PANE, title: 'Skill census' })
-    const list = rows(await read($, inventory), await read($, usage))
+    const inv = await read($, inventory)
+    const list = rows(inv, await read($, usage))
     const where = opened.isPlaced ? 'Opened the Skill census pane.' : ''
+    const tables = [pluginsTable(list, await $.clock.now()), disableHint(list, inv.pluginIds)]
 
-    return { text: `${summary(list)}. ${where}\n\n${pluginsTable(list, await $.clock.now())}` }
+    return { text: `${summary(list)}. ${where}\n\n${tables.filter(Boolean).join('\n\n')}` }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Markdown } = $.ui.resolve(e)
-    const list = rows(await read($, inventory), await read($, usage))
+    const inv = await read($, inventory)
+    const list = rows(inv, await read($, usage))
     const current: View = await read($, view)
     const now = await $.clock.now()
     const pick = (to: View) => () => update($, view, () => to)
@@ -221,7 +262,13 @@ export const register: Register = on => {
             onPress={pick('plugins')}
           />
         </Box>
-        <Markdown text={current === 'skills' ? skillsTable(list, now) : pluginsTable(list, now)} />
+        <Markdown
+          text={
+            current === 'skills'
+              ? skillsTable(list, now)
+              : [pluginsTable(list, now), disableHint(list, inv.pluginIds)].filter(Boolean).join('\n\n')
+          }
+        />
       </Box>
     )
   })

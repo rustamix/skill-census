@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { parseHistory, pluginsTable, rows } from '../hooks/register'
+import { disableHint, parseHistory, pluginsTable, rows } from '../hooks/register'
 
 const DAY = 86_400_000
 const NOW = Date.parse('2026-10-21T12:00:00Z')
@@ -40,7 +40,14 @@ function engine(on: On) {
       { name: 'mr-description', description: '', source: 'user' },
       { name: 'superpowers:brainstorming', description: '', source: 'plugin', plugin: 'superpowers' },
       { name: 'superpowers:writing-plans', description: '', source: 'plugin', plugin: 'superpowers' },
+      { name: 'ecc:plan', description: '', source: 'plugin', plugin: 'ecc' },
+      { name: 'ecc:tdd', description: '', source: 'plugin', plugin: 'ecc' },
+      // added from outside Claude Code settings: no id to disable it by
+      { name: 'figma:use', description: '', source: 'plugin', plugin: 'figma' },
     ],
+  }))
+  on('settings.read', () => ({
+    value: { enabledPlugins: { 'ecc@ecc': true, 'superpowers@claude-plugins-official': true } },
   }))
   on('process.run', () => ({
     value: {
@@ -74,6 +81,7 @@ test('builtins are left out and plugins are summed', async () => {
       { name: 'superpowers:writing-plans', plugin: 'superpowers' },
     ],
     builtins: ['compact'],
+    pluginIds: {},
   }
   const list = rows(inv, {
     'superpowers:brainstorming': { count: 3, last: NOW - 2 * DAY },
@@ -82,6 +90,32 @@ test('builtins are left out and plugins are summed', async () => {
 
   expect(list.map(r => r.name)).toEqual(['superpowers:brainstorming', 'superpowers:writing-plans'])
   expect(pluginsTable(list, NOW)).toContain('| superpowers | 1 / 2 | 3 | 2d ago |')
+})
+
+test('the hint lists never-used plugins, biggest first, with their disable command', async () => {
+  const inv = {
+    skills: [
+      { name: 'ecc:plan', plugin: 'ecc' },
+      { name: 'ecc:tdd', plugin: 'ecc' },
+      { name: 'Notion:search', plugin: 'Notion' },
+      { name: 'figma:use', plugin: 'figma' },
+      { name: 'superpowers:brainstorming', plugin: 'superpowers' },
+      { name: 'my-skill' },
+    ],
+    builtins: [],
+    pluginIds: { ecc: 'ecc@ecc', notion: 'notion@claude-plugins-official' },
+  }
+  const hint = disableHint(rows(inv, { 'superpowers:brainstorming': { count: 1, last: NOW } }), inv.pluginIds)
+
+  expect(hint).toContain('(3)')
+  expect(hint).toContain('| ecc | 2 | `claude plugin disable ecc@ecc` |')
+  // the id is matched whatever the case of the name the menu shows
+  expect(hint).toContain('`claude plugin disable notion@claude-plugins-official`')
+  expect(hint).toContain('| figma | 1 | not in your Claude Code settings')
+  expect(hint.indexOf('| ecc |')).toBeLessThan(hint.indexOf('| figma |'))
+  expect(hint).not.toContain('superpowers')
+  expect(hint).not.toContain('your skills')
+  expect(disableHint(rows({ ...inv, skills: [] }, {}), {})).toBe('')
 })
 
 test('history and live uses show in the pane, on every surface', async ($, on) => {
@@ -106,7 +140,10 @@ test('history and live uses show in the pane, on every surface', async ($, on) =
     expect(table?.text).not.toContain('compact')
 
     await ui.press({ key: 'plugins' })
-    expect((await ui.find({ type: 'Markdown' }))?.text).toContain('| superpowers | 1 / 2 | 3 | today |')
+    const plugins = (await ui.find({ type: 'Markdown' }))?.text
+    expect(plugins).toContain('| superpowers | 1 / 2 | 3 | today |')
+    expect(plugins).toContain('| ecc | 2 | `claude plugin disable ecc@ecc` |')
+    expect(plugins).toContain('| figma | 1 | not in your Claude Code settings')
     await ui.press({ key: 'skills' })
     await ui.unmount()
   }
