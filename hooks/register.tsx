@@ -5,6 +5,8 @@ import type { Inventory, Usage, View } from '../types'
 
 const PANE = 'skill-census'
 const DAY = 86_400_000
+const SCANNING =
+  'Still reading past transcripts (about 15 seconds on the first run), so these counts are incomplete.'
 
 const usage = atom({ plugin: 'skill-census', key: 'usage' } as const, {})
 const inventory = atom({ plugin: 'skill-census', key: 'inventory' } as const, {
@@ -53,16 +55,28 @@ function merge(base: Usage, extra: Usage): Usage {
   return merged
 }
 
+// History and live uses are kept apart and history is replaced, never added to, so two
+// sessions importing at once write the same history instead of counting it twice.
 // Store writes are read-modify-write, so they go one at a time.
+// shortcut: two processes adding live uses at the same moment can lose one; fine for counts.
 let writes: Promise<unknown> = Promise.resolve()
-function add($: EngineInterface, extra: Usage) {
-  const run = writes.then(async () => {
-    const merged = merge(((await $.store.get('usage')) ?? {}) as Usage, extra)
-    await $.store.set('usage', merged)
-    await update($, usage, () => merged)
-  })
+function serially(task: () => Promise<void>) {
+  const run = writes.then(task)
   writes = run.catch(() => undefined)
   return run
+}
+
+async function showUsage($: EngineInterface) {
+  const history = ((await $.store.get('history')) ?? {}) as Usage
+  const live = ((await $.store.get('live')) ?? {}) as Usage
+  await update($, usage, () => merge(history, live))
+}
+
+function addLive($: EngineInterface, extra: Usage) {
+  return serially(async () => {
+    await $.store.set('live', merge(((await $.store.get('live')) ?? {}) as Usage, extra))
+    await showUsage($)
+  })
 }
 
 const pluginOf = (name: string) =>
@@ -89,7 +103,7 @@ async function refreshInventory($: EngineInterface) {
 }
 
 async function importHistory($: EngineInterface, liveSince: number) {
-  if (await $.store.get('imported')) return
+  if ((await $.store.get('history')) !== undefined) return
   await update($, isScanning, () => true)
   try {
     const root =
@@ -98,8 +112,11 @@ async function importHistory($: EngineInterface, liveSince: number) {
       timeoutMs: 600_000,
     })
     if (ran.exitCode !== 0) throw new Error(ran.stderr.slice(0, 200))
-    await add($, parseHistory(ran.stdout, liveSince))
-    await $.store.set('imported', true)
+    const history = parseHistory(ran.stdout, liveSince)
+    await serially(async () => {
+      await $.store.set('history', history)
+      await showUsage($)
+    })
   } catch (error) {
     $.ui.toast(`skill-census: could not read past transcripts (${String(error)})`)
   } finally {
@@ -201,13 +218,17 @@ export const register: Register = on => {
       name: PANE,
       description: 'Show how often each skill is used',
     })
+    // 0.1.0 kept history and live uses in one 'usage' key and could count history twice:
+    // drop it and recount from the transcripts.
+    if ((await $.store.get('usage')) !== undefined) {
+      for (const key of ['usage', 'imported', 'liveSince']) await $.store.delete(key)
+    }
     let liveSince = (await $.store.get('liveSince')) as number | undefined
     if (liveSince === undefined) {
       liveSince = await $.clock.now()
       await $.store.set('liveSince', liveSince)
     }
-    const saved = ((await $.store.get('usage')) ?? {}) as Usage
-    await update($, usage, () => saved)
+    await showUsage($)
     void refreshInventory($)
     void importHistory($, liveSince)
 
@@ -218,7 +239,7 @@ export const register: Register = on => {
   on('skill.prompt', async ($, e, next) => {
     const result = await next(e)
     const name = e.pluginName && !e.skill.includes(':') ? `${e.pluginName}:${e.skill}` : e.skill
-    await add($, { [name]: { count: 1, last: await $.clock.now() } }).catch(() => undefined)
+    await addLive($, { [name]: { count: 1, last: await $.clock.now() } }).catch(() => undefined)
 
     return result
   })
@@ -229,6 +250,12 @@ export const register: Register = on => {
     const inv = await read($, inventory)
     const list = rows(inv, await read($, usage))
     const where = opened.isPlaced ? 'Opened the Skill census pane.' : ''
+    // A partial count would call every plugin unused: no advice until history is in.
+    if (await read($, isScanning)) {
+      return {
+        text: `${summary(list)}. ${where}\n\n${SCANNING} Run /skill-census again in a few seconds; the pane updates by itself.`,
+      }
+    }
     const tables = [pluginsTable(list, await $.clock.now()), disableHint(list, inv.pluginIds)]
 
     return { text: `${summary(list)}. ${where}\n\n${tables.filter(Boolean).join('\n\n')}` }
@@ -241,12 +268,14 @@ export const register: Register = on => {
     const current: View = await read($, view)
     const now = await $.clock.now()
     const pick = (to: View) => () => update($, view, () => to)
+    const scanning = await read($, isScanning)
+    const hint = scanning ? SCANNING : disableHint(list, inv.pluginIds)
 
     return (
       <Box flexDirection="column">
         <Text>
           {summary(list)}
-          {(await read($, isScanning)) ? ' · reading past transcripts…' : ''}
+          {scanning ? ' · reading past transcripts…' : ''}
         </Text>
         <Box>
           <Button
@@ -266,7 +295,7 @@ export const register: Register = on => {
           text={
             current === 'skills'
               ? skillsTable(list, now)
-              : [pluginsTable(list, now), disableHint(list, inv.pluginIds)].filter(Boolean).join('\n\n')
+              : [pluginsTable(list, now), hint].filter(Boolean).join('\n\n')
           }
         />
       </Box>
