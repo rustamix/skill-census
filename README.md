@@ -75,6 +75,13 @@ grep -rhE --include=*.jsonl -e '"name":"Skill","input":\{"skill":"' -e '<command
 
 It keeps only the transcript lines with a Skill tool call or a typed `/command`; the plugin parses those lines itself. `grep` is used because transcripts can be tens of megabytes each, more than a plugin can read at once.
 
+**Hooks.** None of them changes what passes through:
+
+- `session.start`: registers `/skill-census` and starts the one-time history import.
+- `skill.prompt`: notes the name of the skill that ran and adds one to its count. The skill's text is passed on unchanged and is not stored.
+- `command.run`: answers `/skill-census` only, with the summary and the pane. Other commands are not hooked.
+- `ui.render`: draws the plugin's own Skill census pane only.
+
 ## Limits
 
 - Reading history needs `grep`, so it works on macOS and Linux. On Windows the live count still works.
