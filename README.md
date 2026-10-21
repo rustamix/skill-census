@@ -54,11 +54,30 @@ Run `/skill-census`. It prints a per-plugin summary and opens the **Skill census
 - **History.** On first run it reads your past transcripts (`~/.claude/projects`) once and counts every skill the agent called and every `/skill` you typed. Built-in commands like `/compact` are left out.
 - **Live.** From then on it counts each skill as it runs, through the `skill.prompt` event: called by the agent, typed as `/name`, or preloaded into a subagent.
 
-Counts are kept in the plugin's own store under your Claude Code config directory and survive restarts. Uses after the plugin was first loaded are counted live only, so nothing is counted twice. Nothing leaves your machine.
+Counts are kept in the plugin's own store under your Claude Code config directory and survive restarts. History and live uses are stored apart, so a second import (two sessions starting at once) replaces history instead of counting it twice.
+
+## Data and programs
+
+**Sends nothing.** The plugin makes no network requests and passes nothing to the model beyond the `/skill-census` output you ask for. Everything it reads stays on your machine.
+
+**Reads:**
+- your transcripts, `<config dir>/projects/**/*.jsonl` (`~/.claude/projects` by default), once, on first run;
+- the list of slash commands, to know which skills are installed;
+- `enabledPlugins` from your Claude Code settings, to name the `claude plugin disable` command for each plugin.
+
+**Writes:** only its own plugin store: for each skill, how many times it ran and when it last ran.
+
+**Runs one program,** once, on first run: `grep`, started directly (no shell), with fixed arguments and the projects folder as the last one:
+
+```
+grep -rhE --include=*.jsonl -e '"name":"Skill","input":\{"skill":"' -e '<command-name>/' <config dir>/projects
+```
+
+It keeps only the transcript lines with a Skill tool call or a typed `/command`; the plugin parses those lines itself. `grep` is used because transcripts can be tens of megabytes each, more than a plugin can read at once.
 
 ## Limits
 
-- Reading history needs `sh`, `grep` and `awk`, so it works on macOS and Linux. On Windows the live count still works.
+- Reading history needs `grep`, so it works on macOS and Linux. On Windows the live count still works.
 - History only goes back as far as your transcripts do. Claude Code deletes old transcripts after `cleanupPeriodDays` (30 days by default).
 - A skill that a hook injects into the context, without running it as a skill, is not counted and will look unused.
 - A skill marked `user-invocable: false` shows up only once it has been used, since the list of installed skills comes from the slash-command menu.

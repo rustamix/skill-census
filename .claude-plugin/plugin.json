@@ -1,6 +1,6 @@
 {
   "name": "skill-census",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Counts how often each skill is used and shows which ones you never touch",
   "author": { "name": "Rustam Salpagarov" },
   "homepage": "https://github.com/rustamix/skill-census",
