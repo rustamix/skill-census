@@ -1,14 +1,26 @@
 # skill-census
 
-A Claude Code plugin that counts how often each of your skills is used, so you can find the ones you never touch and remove them.
+Usage statistics for Claude Code skills. `skill-census` counts how often each installed skill runs and shows which skills and plugins you never use, so you can remove them.
 
-- **History.** On first run it reads your past transcripts (`~/.claude/projects`) and counts every skill the agent called and every `/skill` you typed.
-- **Live count.** From then on it counts each skill as it runs: called by the agent, typed as `/name`, or preloaded into a subagent.
-- **A pane.** `/skill-census` opens a pane beside the chat (desktop app and fullscreen terminal) with two tables:
-  - **Skills**: uses and last use per skill, never-used ones first;
-  - **Plugins**: how many of each plugin's skills you used. Plugin skills cannot be removed one by one, so this is the view for deciding which plugin to disable.
+Every installed skill takes room in the agent's context and in the slash-command menu, whether it runs or not.
+
+Example output of `/skill-census`:
+
+```
+skill-census: 28 of 527 skills used, 499 never.
+
+| Plugin            | Skills used | Uses | Last used |
+| ----------------- | ----------: | ---: | --------- |
+| ecc               |     0 / 397 |    0 | never     |
+| figma             |      0 / 16 |    0 | never     |
+| docker-skills     |      0 / 11 |    0 | never     |
+| superpowers       |      9 / 15 |  115 | 1d ago    |
+| your skills       |     17 / 35 |  108 | today     |
+```
 
 ## Install
+
+Requires **Claude Code 2.1.286 or newer** (`claude --version`). The plugin uses Claude Code's hooks-module API, which is in early access, so an older version will not load it.
 
 At the prompt of a Claude Code terminal session:
 
@@ -26,16 +38,17 @@ In the desktop app: click **+** next to the prompt box → **Plugins** → **Add
 
 ## Use
 
-Run `/skill-census`. The command prints a per-plugin summary and opens the **Skill census** pane.
+Run `/skill-census`. It prints a per-plugin summary and opens the **Skill census** pane beside the chat (desktop app and fullscreen terminal) with two tables:
+
+- **Skills**: uses and last use of each skill, never-used ones first;
+- **Plugins**: how many of each plugin's skills you used. A plugin's skills cannot be removed one by one, so this is the view for deciding which plugin to disable.
 
 ## How it counts
 
-| Where | What is counted |
-| --- | --- |
-| Past transcripts | `Skill` tool calls and typed `/commands` (built-in ones like `/compact` are left out) |
-| Live | the `skill.prompt` event, which fires for every way a skill runs |
+- **History.** On first run it reads your past transcripts (`~/.claude/projects`) once and counts every skill the agent called and every `/skill` you typed. Built-in commands like `/compact` are left out.
+- **Live.** From then on it counts each skill as it runs, through the `skill.prompt` event: called by the agent, typed as `/name`, or preloaded into a subagent.
 
-Counts live in the plugin's own store under your Claude Code config directory and survive restarts. History is read once; uses after the plugin was first loaded are counted live, so nothing is counted twice.
+Counts are kept in the plugin's own store under your Claude Code config directory and survive restarts. Uses after the plugin was first loaded are counted live only, so nothing is counted twice. Nothing leaves your machine.
 
 ## Limits
 
@@ -55,4 +68,4 @@ Run a working copy in a session with `claude --plugin-dir /path/to/skill-census`
 
 ## License
 
-MIT
+MIT. Not affiliated with Anthropic.
