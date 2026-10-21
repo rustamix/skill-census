@@ -1,0 +1,9 @@
+{
+  "name": "skill-census",
+  "version": "0.1.0",
+  "description": "Counts how often each skill is used and shows which ones you never touch",
+  "author": { "name": "Rustam Salpagarov" },
+  "repository": "https://github.com/rustamix/skill-census",
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

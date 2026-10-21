@@ -1,0 +1,6 @@
+{
+  "name": "skill-census",
+  "owner": { "name": "Rustam Salpagarov" },
+  "metadata": { "description": "Skill usage statistics for Claude Code" },
+  "plugins": [{ "name": "skill-census", "source": "./" }]
+}
